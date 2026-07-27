@@ -6,6 +6,7 @@ load_dotenv()
 class Config:
     """FinBot Configuration"""
     
+    # Telegram Bot Token
     BOT_TOKEN = os.getenv('BOT_TOKEN')
     if not BOT_TOKEN:
         raise ValueError("BOT_TOKEN not found")
@@ -16,8 +17,20 @@ class Config:
     # Default Currency
     DEFAULT_CURRENCY = os.getenv('DEFAULT_CURRENCY', 'USD')
     
-    # All Categories
-    CATEGORIES = [
+    # Income Categories
+    INCOME_CATEGORIES = [
+        'Salary',
+        'Freelance',
+        'Investment',
+        'Gift',
+        'Refund',
+        'Bonus',
+        'Rental Income',
+        'Other Income'
+    ]
+    
+    # Expense Categories
+    EXPENSE_CATEGORIES = [
         'Food & Dining',
         'Transportation',
         'Shopping',
@@ -51,28 +64,11 @@ class Config:
         'Tuition',
         'Books',
         'Supplies',
-        'Salary',
-        'Freelance',
-        'Investment',
-        'Gift',
-        'Savings',
         'Other'
     ]
     
-    # Income Categories
-    INCOME_CATEGORIES = [
-        'Salary',
-        'Freelance',
-        'Investment',
-        'Gift',
-        'Refund',
-        'Bonus',
-        'Rental Income',
-        'Other Income'
-    ]
-    
-    # Expense Categories - NOW DEFINED AFTER INCOME_CATEGORIES
-    EXPENSE_CATEGORIES = [c for c in CATEGORIES if c not in INCOME_CATEGORIES]
+    # Combined Categories (NO COMPREHENSION NEEDED)
+    CATEGORIES = INCOME_CATEGORIES + EXPENSE_CATEGORIES
     
     # Budget Periods
     BUDGET_PERIODS = ['Daily', 'Weekly', 'Monthly', 'Yearly']
