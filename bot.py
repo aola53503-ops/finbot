@@ -416,4 +416,214 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await dashboard_command(update, context)
         return
     
-    if data
+    if data == "transactions":
+        await transactions_command(update, context)
+        return
+    
+    if data == "analytics":
+        await analytics_command(update, context)
+        return
+    
+    if data == "advice":
+        await advice_command(update, context)
+        return
+    
+    if data == "budget":
+        await budget_command(update, context)
+        return
+    
+    if data == "goals":
+        await goals_command(update, context)
+        return
+    
+    if data == "add_income":
+        await add_income_command(update, context)
+        return
+    
+    if data == "add_expense":
+        await add_expense_command(update, context)
+        return
+    
+    if data == "set_budget":
+        await query.edit_message_text(
+            "📝 *Set Budget*\n\nUse: `/setbudget \"Category\" Amount`\n\nExample: `/setbudget \"Food & Dining\" 500`",
+            parse_mode='Markdown'
+        )
+        return
+    
+    # Handle income category selection
+    if data.startswith("income_"):
+        category = data.replace("income_", "")
+        context.user_data['category'] = category
+        
+        await query.edit_message_text(
+            f"💰 *Add Income*\n\nCategory: {category}\n\nEnter amount:",
+            parse_mode='Markdown'
+        )
+        return ADD_INCOME
+    
+    # Handle expense category selection
+    if data.startswith("expense_"):
+        category = data.replace("expense_", "")
+        context.user_data['category'] = category
+        
+        await query.edit_message_text(
+            f"💸 *Add Expense*\n\nCategory: {category}\n\nEnter amount:",
+            parse_mode='Markdown'
+        )
+        return ADD_EXPENSE
+
+async def set_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set budget via command"""
+    try:
+        if not context.args:
+            await update.message.reply_text(
+                "📝 *Usage:* `/setbudget \"Category\" Amount`\n\nExample: `/setbudget \"Food & Dining\" 500`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Parse the command
+        text = ' '.join(context.args)
+        if '"' in text:
+            category = text.split('"')[1]
+            amount_part = text.split('"')[2].strip()
+        else:
+            parts = text.split(' ')
+            category = parts[0]
+            amount_part = ' '.join(parts[1:])
+        
+        amount = float(amount_part)
+        
+        if amount <= 0:
+            await update.message.reply_text(
+                "❌ Amount must be greater than 0.",
+                parse_mode='Markdown'
+            )
+            return
+        
+        user = update.effective_user
+        budget_mgr.create_budget(user.id, category, amount)
+        
+        await update.message.reply_text(
+            f"✅ *Budget Set!*\n\n📌 Category: {category}\n💰 Amount: ${amount:.2f}\n📅 Period: Monthly",
+            parse_mode='Markdown'
+        )
+        
+    except (ValueError, IndexError):
+        await update.message.reply_text(
+            "❌ Invalid format. Use: `/setbudget \"Category\" Amount`\n\nExample: `/setbudget \"Food & Dining\" 500`",
+            parse_mode='Markdown'
+        )
+
+async def set_goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Set savings goal via command"""
+    try:
+        if len(context.args) < 3:
+            await update.message.reply_text(
+                "📝 *Usage:* `/setgoal \"Goal Name\" Amount YYYY-MM-DD`\n\n"
+                "Example: `/setgoal \"New Car\" 5000 2025-12-31`",
+                parse_mode='Markdown'
+            )
+            return
+        
+        # Parse the command
+        text = ' '.join(context.args)
+        if '"' in text:
+            name = text.split('"')[1]
+            rest = text.split('"')[2].strip().split(' ')
+            amount = float(rest[0])
+            deadline = datetime.strptime(rest[1], '%Y-%m-%d')
+        else:
+            parts = text.split(' ')
+            name = parts[0]
+            amount = float(parts[1])
+            deadline = datetime.strptime(parts[2], '%Y-%m-%d')
+        
+        user = update.effective_user
+        db.add_savings_goal(user.id, name, amount, deadline)
+        
+        await update.message.reply_text(
+            f"""
+✅ *Savings Goal Set!*
+
+🎯 Goal: {name}
+💰 Target: ${amount:.2f}
+📅 Deadline: {deadline.strftime('%B %d, %Y')}
+
+💡 Tip: Add expenses to track your progress!
+""",
+            parse_mode='Markdown'
+        )
+        
+    except Exception as e:
+        await update.message.reply_text(
+            f"❌ Error: {e}\n\nUse: `/setgoal \"Goal Name\" Amount YYYY-MM-DD`",
+            parse_mode='Markdown'
+        )
+
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel current operation"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ Cancelled.\n\nType /start to return to menu!",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+# ==================== MAIN FUNCTION ====================
+
+def main():
+    try:
+        token = os.getenv('BOT_TOKEN')
+        if not token:
+            logger.error("❌ BOT_TOKEN not set!")
+            sys.exit(1)
+        
+        logger.info("🏦 FinBot is starting...")
+        
+        application = Application.builder().token(token).build()
+        
+        # Command handlers
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("setbudget", set_budget_command))
+        application.add_handler(CommandHandler("setgoal", set_goal_command))
+        application.add_handler(CommandHandler("cancel", cancel_command))
+        
+        # Callback handlers
+        application.add_handler(CallbackQueryHandler(button_callback))
+        
+        # Conversation handlers
+        income_conv = ConversationHandler(
+            entry_points=[CallbackQueryHandler(add_income_command, pattern="^add_income$")],
+            states={
+                ADD_INCOME: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_income_amount),
+                    CallbackQueryHandler(button_callback, pattern="^income_"),
+                ]
+            },
+            fallbacks=[CommandHandler("cancel", cancel_command)]
+        )
+        application.add_handler(income_conv)
+        
+        expense_conv = ConversationHandler(
+            entry_points=[CallbackQueryHandler(add_expense_command, pattern="^add_expense$")],
+            states={
+                ADD_EXPENSE: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, handle_expense_amount),
+                    CallbackQueryHandler(button_callback, pattern="^expense_"),
+                ]
+            },
+            fallbacks=[CommandHandler("cancel", cancel_command)]
+        )
+        application.add_handler(expense_conv)
+        
+        logger.info("✅ FinBot is running!")
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+        
+    except Exception as e:
+        logger.error(f"❌ Fatal error: {e}")
+        sys.exit(1)
+
+if __name__ == '__main__':
+    main()
