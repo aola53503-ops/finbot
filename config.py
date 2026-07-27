@@ -16,7 +16,7 @@ class Config:
     # Default Currency
     DEFAULT_CURRENCY = os.getenv('DEFAULT_CURRENCY', 'USD')
     
-    # Categories
+    # All Categories
     CATEGORIES = [
         'Food & Dining',
         'Transportation',
@@ -71,7 +71,7 @@ class Config:
         'Other Income'
     ]
     
-    # Expense Categories
+    # Expense Categories - NOW DEFINED AFTER INCOME_CATEGORIES
     EXPENSE_CATEGORIES = [c for c in CATEGORIES if c not in INCOME_CATEGORIES]
     
     # Budget Periods
