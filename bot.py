@@ -4,7 +4,7 @@
 import logging
 import sys
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application, CommandHandler, CallbackQueryHandler,
@@ -26,8 +26,8 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ==================== CONSTANTS ====================
-SELECTING_CATEGORY, ENTERING_AMOUNT, ENTERING_DESCRIPTION = range(3)
-SELECTING_EXPENSE_CATEGORY, ENTERING_EXPENSE_AMOUNT, ENTERING_EXPENSE_DESCRIPTION = range(3, 6)
+INCOME_CATEGORY, INCOME_AMOUNT, INCOME_DESCRIPTION = range(3)
+EXPENSE_CATEGORY, EXPENSE_AMOUNT, EXPENSE_DESCRIPTION = range(3, 6)
 
 # ==================== INITIALIZATION ====================
 db = Database()
@@ -35,25 +35,23 @@ tm = TransactionManager()
 analytics = Analytics()
 budget_mgr = BudgetManager()
 
-# ==================== COMMAND HANDLERS ====================
+# ==================== START COMMAND ====================
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Start command with main menu"""
     user = update.effective_user
     db.add_user(user.id, user.username, user.first_name)
     
-    # Get user summary
     summary = tm.get_summary(user.id, 'today')
     
     keyboard = [
-        [InlineKeyboardButton("💰 Add Income", callback_data="add_income"),
-         InlineKeyboardButton("💸 Add Expense", callback_data="add_expense")],
+        [InlineKeyboardButton("💰 Add Income", callback_data="income"),
+         InlineKeyboardButton("💸 Add Expense", callback_data="expense")],
         [InlineKeyboardButton("📊 Dashboard", callback_data="dashboard"),
          InlineKeyboardButton("📈 Analytics", callback_data="analytics")],
         [InlineKeyboardButton("📋 Transactions", callback_data="transactions"),
          InlineKeyboardButton("📌 Budget", callback_data="budget")],
-        [InlineKeyboardButton("🎯 Savings Goals", callback_data="goals"),
-         InlineKeyboardButton("💡 Tips & Advice", callback_data="advice")]
+        [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -63,11 +61,9 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 *Welcome {user.first_name}!*
 
-💎 *Today's Summary:*
 💰 Income: ${summary['total_income']:.2f}
 💸 Expenses: ${summary['total_expense']:.2f}
-💵 Balance: ${summary['balance']:.2f}
-📊 Transactions: {summary['transaction_count']}
+💎 Balance: ${summary['balance']:.2f}
 
 *Select an option:*
 """,
@@ -77,75 +73,65 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ==================== INCOME FLOW ====================
 
-async def add_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start add income flow"""
+async def income_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Select income category"""
     query = update.callback_query
     await query.answer()
     
-    context.user_data['transaction_type'] = 'income'
-    
     keyboard = []
-    for category in Config.INCOME_CATEGORIES:
-        keyboard.append([InlineKeyboardButton(category, callback_data=f"inc_cat_{category}")])
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="menu")])
+    for cat in Config.INCOME_CATEGORIES:
+        keyboard.append([InlineKeyboardButton(cat, callback_data=f"inc_{cat}")])
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "💰 *Add Income*\n\nSelect income category:",
+        "💰 *Add Income*\n\nSelect category:",
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
-    return SELECTING_CATEGORY
+    return INCOME_CATEGORY
 
 async def income_category_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle income category selection"""
+    """Income category selected"""
     query = update.callback_query
     await query.answer()
     
-    category = query.data.replace("inc_cat_", "")
-    context.user_data['category'] = category
+    category = query.data.replace("inc_", "")
+    context.user_data['income_category'] = category
     
     await query.edit_message_text(
-        f"💰 *Add Income*\n\nCategory: {category}\n\n💰 Enter amount:",
+        f"💰 *Add Income*\n\nCategory: {category}\n\nEnter amount:",
         parse_mode='Markdown'
     )
-    return ENTERING_AMOUNT
+    return INCOME_AMOUNT
 
-async def income_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle income amount input"""
+async def income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Income amount entered"""
     try:
         amount = float(update.message.text)
-        
         if amount <= 0:
-            await update.message.reply_text(
-                "❌ Amount must be greater than 0.\n\n💰 Enter amount:",
-                parse_mode='Markdown'
-            )
-            return ENTERING_AMOUNT
+            await update.message.reply_text("❌ Amount must be > 0. Enter amount:")
+            return INCOME_AMOUNT
         
-        context.user_data['amount'] = amount
+        context.user_data['income_amount'] = amount
         
         await update.message.reply_text(
-            f"💰 Amount: ${amount:.2f}\n\n📝 Enter description (or /skip):",
+            f"💰 Amount: ${amount:.2f}\n\nEnter description (or type /skip):",
             parse_mode='Markdown'
         )
-        return ENTERING_DESCRIPTION
+        return INCOME_DESCRIPTION
         
     except ValueError:
-        await update.message.reply_text(
-            "❌ Please enter a valid number.\n\n💰 Enter amount:",
-            parse_mode='Markdown'
-        )
-        return ENTERING_AMOUNT
+        await update.message.reply_text("❌ Invalid number. Enter amount:")
+        return INCOME_AMOUNT
 
-async def income_description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle income description"""
+async def income_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Income description entered"""
     user = update.effective_user
     description = update.message.text
-    amount = context.user_data.get('amount', 0)
-    category = context.user_data.get('category', 'Other Income')
+    amount = context.user_data.get('income_amount', 0)
+    category = context.user_data.get('income_category', 'Other Income')
     
-    # Add transaction
     tm.add_income(user.id, amount, category, description)
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
@@ -158,21 +144,19 @@ async def income_description_entered(update: Update, context: ContextTypes.DEFAU
 💰 Amount: ${amount:.2f}
 📂 Category: {category}
 📝 Description: {description}
-
-💎 New Balance: ${tm.get_balance(user.id):.2f}
+💎 Balance: ${tm.get_balance(user.id):.2f}
 """,
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
     return ConversationHandler.END
 
-async def income_skip_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Skip description for income"""
+async def income_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Skip income description"""
     user = update.effective_user
-    amount = context.user_data.get('amount', 0)
-    category = context.user_data.get('category', 'Other Income')
+    amount = context.user_data.get('income_amount', 0)
+    category = context.user_data.get('income_category', 'Other Income')
     
-    # Add transaction with no description
     tm.add_income(user.id, amount, category, "No description")
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
@@ -184,8 +168,7 @@ async def income_skip_description(update: Update, context: ContextTypes.DEFAULT_
 
 💰 Amount: ${amount:.2f}
 📂 Category: {category}
-
-💎 New Balance: ${tm.get_balance(user.id):.2f}
+💎 Balance: ${tm.get_balance(user.id):.2f}
 """,
         parse_mode='Markdown',
         reply_markup=reply_markup
@@ -194,85 +177,68 @@ async def income_skip_description(update: Update, context: ContextTypes.DEFAULT_
 
 # ==================== EXPENSE FLOW ====================
 
-async def add_expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Start add expense flow"""
+async def expense_category(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Select expense category"""
     query = update.callback_query
     await query.answer()
     
-    context.user_data['transaction_type'] = 'expense'
-    
     keyboard = []
-    # Show top categories
-    top_categories = ['Food & Dining', 'Transportation', 'Shopping', 'Entertainment', 
-                      'Bills & Utilities', 'Rent & Housing', 'Groceries', 'Other']
-    for category in top_categories:
-        keyboard.append([InlineKeyboardButton(category, callback_data=f"exp_cat_{category}")])
-    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="menu")])
+    top_cats = ['Food & Dining', 'Transportation', 'Shopping', 'Entertainment', 
+                'Bills & Utilities', 'Rent & Housing', 'Groceries', 'Other']
+    for cat in top_cats:
+        keyboard.append([InlineKeyboardButton(cat, callback_data=f"exp_{cat}")])
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     await query.edit_message_text(
-        "💸 *Add Expense*\n\nSelect expense category:",
+        "💸 *Add Expense*\n\nSelect category:",
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
-    return SELECTING_EXPENSE_CATEGORY
+    return EXPENSE_CATEGORY
 
 async def expense_category_selected(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle expense category selection"""
+    """Expense category selected"""
     query = update.callback_query
     await query.answer()
     
-    category = query.data.replace("exp_cat_", "")
-    context.user_data['category'] = category
+    category = query.data.replace("exp_", "")
+    context.user_data['expense_category'] = category
     
     await query.edit_message_text(
-        f"💸 *Add Expense*\n\nCategory: {category}\n\n💰 Enter amount:",
+        f"💸 *Add Expense*\n\nCategory: {category}\n\nEnter amount:",
         parse_mode='Markdown'
     )
-    return ENTERING_EXPENSE_AMOUNT
+    return EXPENSE_AMOUNT
 
-async def expense_amount_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle expense amount input"""
+async def expense_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Expense amount entered"""
     try:
         amount = float(update.message.text)
-        
         if amount <= 0:
-            await update.message.reply_text(
-                "❌ Amount must be greater than 0.\n\n💰 Enter amount:",
-                parse_mode='Markdown'
-            )
-            return ENTERING_EXPENSE_AMOUNT
+            await update.message.reply_text("❌ Amount must be > 0. Enter amount:")
+            return EXPENSE_AMOUNT
         
-        context.user_data['amount'] = amount
+        context.user_data['expense_amount'] = amount
         
         await update.message.reply_text(
-            f"💸 Amount: ${amount:.2f}\n\n📝 Enter description (or /skip):",
+            f"💸 Amount: ${amount:.2f}\n\nEnter description (or type /skip):",
             parse_mode='Markdown'
         )
-        return ENTERING_EXPENSE_DESCRIPTION
+        return EXPENSE_DESCRIPTION
         
     except ValueError:
-        await update.message.reply_text(
-            "❌ Please enter a valid number.\n\n💰 Enter amount:",
-            parse_mode='Markdown'
-        )
-        return ENTERING_EXPENSE_AMOUNT
+        await update.message.reply_text("❌ Invalid number. Enter amount:")
+        return EXPENSE_AMOUNT
 
-async def expense_description_entered(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle expense description"""
+async def expense_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Expense description entered"""
     user = update.effective_user
     description = update.message.text
-    amount = context.user_data.get('amount', 0)
-    category = context.user_data.get('category', 'Other')
+    amount = context.user_data.get('expense_amount', 0)
+    category = context.user_data.get('expense_category', 'Other')
     
-    # Add transaction
     tm.add_expense(user.id, amount, category, description)
-    
-    # Check budget alerts
-    alerts = budget_mgr.check_budget_alerts(user.id)
-    alert_msg = ""
-    if alerts:
-        alert_msg = "\n\n⚠️ *Budget Alerts:*\n" + "\n".join(alerts)
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -284,22 +250,19 @@ async def expense_description_entered(update: Update, context: ContextTypes.DEFA
 💸 Amount: ${amount:.2f}
 📂 Category: {category}
 📝 Description: {description}
-
-💎 New Balance: ${tm.get_balance(user.id):.2f}
-{alert_msg}
+💎 Balance: ${tm.get_balance(user.id):.2f}
 """,
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
     return ConversationHandler.END
 
-async def expense_skip_description(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Skip description for expense"""
+async def expense_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Skip expense description"""
     user = update.effective_user
-    amount = context.user_data.get('amount', 0)
-    category = context.user_data.get('category', 'Other')
+    amount = context.user_data.get('expense_amount', 0)
+    category = context.user_data.get('expense_category', 'Other')
     
-    # Add transaction with no description
     tm.add_expense(user.id, amount, category, "No description")
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
@@ -311,18 +274,17 @@ async def expense_skip_description(update: Update, context: ContextTypes.DEFAULT
 
 💸 Amount: ${amount:.2f}
 📂 Category: {category}
-
-💎 New Balance: ${tm.get_balance(user.id):.2f}
+💎 Balance: ${tm.get_balance(user.id):.2f}
 """,
         parse_mode='Markdown',
         reply_markup=reply_markup
     )
     return ConversationHandler.END
 
-# ==================== OTHER COMMAND HANDLERS ====================
+# ==================== DASHBOARD & OTHER COMMANDS ====================
 
 async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show financial dashboard"""
+    """Show dashboard"""
     query = update.callback_query
     await query.answer()
     
@@ -330,34 +292,22 @@ async def dashboard_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     summary = tm.get_summary(user.id, 'month')
     
     message = f"""
-📊 *Financial Dashboard*
-━━━━━━━━━━━━━━━━━━━━━
+📊 *Dashboard*
+━━━━━━━━━━━━━━━━
 
-📅 *This Month:*
-💰 Total Income: ${summary['total_income']:.2f}
-💸 Total Expenses: ${summary['total_expense']:.2f}
-💎 Net Balance: ${summary['balance']:.2f}
+💰 Income: ${summary['total_income']:.2f}
+💸 Expenses: ${summary['total_expense']:.2f}
+💎 Balance: ${summary['balance']:.2f}
 📊 Transactions: {summary['transaction_count']}
-
-━━━━━━━━━━━━━━━━━━━━━
-
-📈 *Quick Stats:*
-• Daily Avg Spend: ${summary['total_expense']/30:.2f}
-• Savings Rate: {((summary['balance']/summary['total_income'])*100) if summary['total_income'] > 0 else 0:.1f}%
-• Top Category: {max(summary['expense_by_category'].items(), key=lambda x: x[1])[0] if summary['expense_by_category'] else 'N/A'}
 """
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        message,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def transactions_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show recent transactions"""
+    """Show transactions"""
     query = update.callback_query
     await query.answer()
     
@@ -365,215 +315,45 @@ async def transactions_command(update: Update, context: ContextTypes.DEFAULT_TYP
     transactions = db.get_transactions(user.id, limit=10)
     
     if not transactions:
-        await query.edit_message_text(
-            "📋 *No transactions yet*\n\nAdd your first transaction using the menu!",
-            parse_mode='Markdown'
-        )
+        await query.edit_message_text("📋 No transactions yet.")
         return
     
-    message = "📋 *Recent Transactions*\n━━━━━━━━━━━━━━━━\n\n"
-    
-    for t in transactions[:10]:
+    message = "📋 *Recent Transactions*\n\n"
+    for t in transactions[:5]:
         sign = '+' if t.type == 'income' else '-'
         emoji = '💰' if t.type == 'income' else '💸'
-        message += f"{emoji} *{t.description}*\n"
-        message += f"├─ {sign}${t.amount:.2f}\n"
-        message += f"├─ {t.category}\n"
-        message += f"└─ {t.date.strftime('%b %d, %H:%M')}\n\n"
+        message += f"{emoji} {t.description}: {sign}${t.amount:.2f} ({t.category})\n"
     
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        message,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    await query.edit_message_text(message, parse_mode='Markdown', reply_markup=reply_markup)
 
 async def analytics_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show financial analytics"""
+    """Show analytics"""
     query = update.callback_query
     await query.answer()
     
-    user = update.effective_user
-    
-    # Get trends
-    trends = analytics.calculate_monthly_trends(user.id)
-    trends_msg = analytics.format_trends(trends)
-    
-    keyboard = [
-        [InlineKeyboardButton("💡 Get Advice", callback_data="advice")],
-        [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
     await query.edit_message_text(
-        f"""
-📈 *Financial Analytics*
-
-{trends_msg}
-
-Select an option below:
-""",
+        "📈 *Analytics*\n\nFeature coming soon!\n\n🏠 Menu",
         parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
-async def advice_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show financial advice"""
-    query = update.callback_query
-    await query.answer()
-    
-    user = update.effective_user
-    advice = analytics.get_spending_advice(user.id)
-    advice_msg = analytics.format_advice(advice)
-    
-    keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        advice_msg,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 Menu", callback_data="menu")]])
     )
 
 async def budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show budget status"""
+    """Show budget"""
     query = update.callback_query
     await query.answer()
     
     user = update.effective_user
     status = budget_mgr.get_budget_status(user.id)
     
-    keyboard = [
-        [InlineKeyboardButton("📝 Set Budget", callback_data="set_budget")],
-        [InlineKeyboardButton("🏠 Menu", callback_data="menu")]
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await query.edit_message_text(
-        status,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
-
-async def goals_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Show savings goals"""
-    query = update.callback_query
-    await query.answer()
-    
-    goals_msg = """
-🎯 *Savings Goals*
-
-Track your savings goals and progress!
-
-*To create a goal:*
-`/setgoal "Goal Name" Amount YYYY-MM-DD`
-
-*Example:*
-`/setgoal "New Car" 5000 2025-12-31`
-
-*Current Goals:*
-No active goals. Create one using the command above!
-"""
-    
     keyboard = [[InlineKeyboardButton("🏠 Menu", callback_data="menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
     
-    await query.edit_message_text(
-        goals_msg,
-        parse_mode='Markdown',
-        reply_markup=reply_markup
-    )
+    await query.edit_message_text(status, parse_mode='Markdown', reply_markup=reply_markup)
 
-async def set_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set budget via command"""
-    try:
-        if not context.args:
-            await update.message.reply_text(
-                "📝 *Usage:* `/setbudget \"Category\" Amount`\n\nExample: `/setbudget \"Food & Dining\" 500`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Parse the command
-        text = ' '.join(context.args)
-        if '"' in text:
-            category = text.split('"')[1]
-            amount_part = text.split('"')[2].strip()
-        else:
-            parts = text.split(' ')
-            category = parts[0]
-            amount_part = ' '.join(parts[1:])
-        
-        amount = float(amount_part)
-        
-        if amount <= 0:
-            await update.message.reply_text(
-                "❌ Amount must be greater than 0.",
-                parse_mode='Markdown'
-            )
-            return
-        
-        user = update.effective_user
-        budget_mgr.create_budget(user.id, category, amount)
-        
-        await update.message.reply_text(
-            f"✅ *Budget Set!*\n\n📌 Category: {category}\n💰 Amount: ${amount:.2f}\n📅 Period: Monthly",
-            parse_mode='Markdown'
-        )
-        
-    except (ValueError, IndexError):
-        await update.message.reply_text(
-            "❌ Invalid format. Use: `/setbudget \"Category\" Amount`\n\nExample: `/setbudget \"Food & Dining\" 500`",
-            parse_mode='Markdown'
-        )
-
-async def set_goal_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Set savings goal via command"""
-    try:
-        if len(context.args) < 3:
-            await update.message.reply_text(
-                "📝 *Usage:* `/setgoal \"Goal Name\" Amount YYYY-MM-DD`\n\n"
-                "Example: `/setgoal \"New Car\" 5000 2025-12-31`",
-                parse_mode='Markdown'
-            )
-            return
-        
-        # Parse the command
-        text = ' '.join(context.args)
-        if '"' in text:
-            name = text.split('"')[1]
-            rest = text.split('"')[2].strip().split(' ')
-            amount = float(rest[0])
-            deadline = datetime.strptime(rest[1], '%Y-%m-%d')
-        else:
-            parts = text.split(' ')
-            name = parts[0]
-            amount = float(parts[1])
-            deadline = datetime.strptime(parts[2], '%Y-%m-%d')
-        
-        user = update.effective_user
-        db.add_savings_goal(user.id, name, amount, deadline)
-        
-        await update.message.reply_text(
-            f"""
-✅ *Savings Goal Set!*
-
-🎯 Goal: {name}
-💰 Target: ${amount:.2f}
-📅 Deadline: {deadline.strftime('%B %d, %Y')}
-""",
-            parse_mode='Markdown'
-        )
-        
-    except Exception as e:
-        await update.message.reply_text(
-            f"❌ Error: {e}\n\nUse: `/setgoal \"Goal Name\" Amount YYYY-MM-DD`",
-            parse_mode='Markdown'
-        )
-
-# ==================== CANCEL / MENU ====================
+# ==================== MENU & CANCEL ====================
 
 async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Return to menu"""
@@ -582,16 +362,27 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data.clear()
     await start_command(update, context)
 
-async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Cancel current operation"""
+async def cancel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel callback"""
+    query = update.callback_query
+    await query.answer()
     context.user_data.clear()
-    await update.message.reply_text(
-        "❌ Cancelled.\n\nType /start to return to menu!",
+    await query.edit_message_text(
+        "❌ Cancelled.\n\nType /start to return!",
         parse_mode='Markdown'
     )
     return ConversationHandler.END
 
-# ==================== MAIN FUNCTION ====================
+async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Cancel command"""
+    context.user_data.clear()
+    await update.message.reply_text(
+        "❌ Cancelled.\n\nType /start to return!",
+        parse_mode='Markdown'
+    )
+    return ConversationHandler.END
+
+# ==================== MAIN ====================
 
 def main():
     try:
@@ -604,65 +395,54 @@ def main():
         
         application = Application.builder().token(token).build()
         
-        # ===== COMMAND HANDLERS =====
-        application.add_handler(CommandHandler("start", start_command))
-        application.add_handler(CommandHandler("setbudget", set_budget_command))
-        application.add_handler(CommandHandler("setgoal", set_goal_command))
-        application.add_handler(CommandHandler("cancel", cancel_command))
-        
         # ===== INCOME CONVERSATION =====
         income_conv = ConversationHandler(
-            entry_points=[CallbackQueryHandler(add_income_start, pattern="^add_income$")],
+            entry_points=[CallbackQueryHandler(income_category, pattern="^income$")],
             states={
-                SELECTING_CATEGORY: [
-                    CallbackQueryHandler(income_category_selected, pattern="^inc_cat_")
-                ],
-                ENTERING_AMOUNT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, income_amount_entered)
-                ],
-                ENTERING_DESCRIPTION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, income_description_entered),
-                    CommandHandler("skip", income_skip_description)
+                INCOME_CATEGORY: [CallbackQueryHandler(income_category_selected, pattern="^inc_")],
+                INCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, income_amount)],
+                INCOME_DESCRIPTION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, income_description),
+                    CommandHandler("skip", income_skip)
                 ]
             },
             fallbacks=[
                 CommandHandler("cancel", cancel_command),
-                CallbackQueryHandler(menu_callback, pattern="^menu$")
+                CallbackQueryHandler(cancel_callback, pattern="^cancel$")
             ]
         )
         application.add_handler(income_conv)
         
         # ===== EXPENSE CONVERSATION =====
         expense_conv = ConversationHandler(
-            entry_points=[CallbackQueryHandler(add_expense_start, pattern="^add_expense$")],
+            entry_points=[CallbackQueryHandler(expense_category, pattern="^expense$")],
             states={
-                SELECTING_EXPENSE_CATEGORY: [
-                    CallbackQueryHandler(expense_category_selected, pattern="^exp_cat_")
-                ],
-                ENTERING_EXPENSE_AMOUNT: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, expense_amount_entered)
-                ],
-                ENTERING_EXPENSE_DESCRIPTION: [
-                    MessageHandler(filters.TEXT & ~filters.COMMAND, expense_description_entered),
-                    CommandHandler("skip", expense_skip_description)
+                EXPENSE_CATEGORY: [CallbackQueryHandler(expense_category_selected, pattern="^exp_")],
+                EXPENSE_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, expense_amount)],
+                EXPENSE_DESCRIPTION: [
+                    MessageHandler(filters.TEXT & ~filters.COMMAND, expense_description),
+                    CommandHandler("skip", expense_skip)
                 ]
             },
             fallbacks=[
                 CommandHandler("cancel", cancel_command),
-                CallbackQueryHandler(menu_callback, pattern="^menu$")
+                CallbackQueryHandler(cancel_callback, pattern="^cancel$")
             ]
         )
         application.add_handler(expense_conv)
         
-        # ===== CALLBACK HANDLERS =====
+        # ===== COMMANDS =====
+        application.add_handler(CommandHandler("start", start_command))
+        application.add_handler(CommandHandler("cancel", cancel_command))
+        application.add_handler(CommandHandler("skip", cancel_command))
+        
+        # ===== CALLBACKS =====
         application.add_handler(CallbackQueryHandler(dashboard_command, pattern="^dashboard$"))
         application.add_handler(CallbackQueryHandler(transactions_command, pattern="^transactions$"))
         application.add_handler(CallbackQueryHandler(analytics_command, pattern="^analytics$"))
-        application.add_handler(CallbackQueryHandler(advice_command, pattern="^advice$"))
         application.add_handler(CallbackQueryHandler(budget_command, pattern="^budget$"))
-        application.add_handler(CallbackQueryHandler(goals_command, pattern="^goals$"))
         application.add_handler(CallbackQueryHandler(menu_callback, pattern="^menu$"))
-        application.add_handler(CallbackQueryHandler(set_budget_command, pattern="^set_budget$"))
+        application.add_handler(CallbackQueryHandler(cancel_callback, pattern="^cancel$"))
         
         logger.info("✅ FinBot is running!")
         application.run_polling(allowed_updates=Update.ALL_TYPES)
